@@ -12,7 +12,7 @@ con `npx skills`.
 ## Instalacion
 
 ```bash
-npx skills add VxGM/Obisidian-skill -g
+npx skills add VxGM/Obsidian-agentic-skill -g
 ```
 
 `-g` instala a nivel usuario (todos tus proyectos). Sin `-g` se instala en el
@@ -21,13 +21,13 @@ proyecto actual.
 Elegir agente o nombre explicito:
 
 ```bash
-npx skills add VxGM/Obisidian-skill --skill obsidian-memory -a claude-code -a codex -g
+npx skills add VxGM/Obsidian-agentic-skill --skill obsidian-memory -a claude-code -a codex -g
 ```
 
 Sin prompts (CI o instalacion rapida):
 
 ```bash
-npx skills add VxGM/Obisidian-skill --skill obsidian-memory --all -y
+npx skills add VxGM/Obsidian-agentic-skill --skill obsidian-memory --all -y
 ```
 
 Actualizar despues:
