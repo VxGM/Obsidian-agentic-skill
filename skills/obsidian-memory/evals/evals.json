@@ -1,0 +1,23 @@
+{
+  "skill_name": "obsidian-memory",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "oye, apunta que en este proyecto los commits van sin emoji y sin coautor, ya me canse de corregirlo",
+      "expected_output": "Activa la skill, hace como maximo 3 preguntas (por que, cuando NO aplica, si reemplaza alguna regla existente) antes de escribir, y crea UNA nota con type=rule y scope del proyecto. No escribe nada sin haber preguntado el por que.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "seguimos con la landing, acuerdate como queriamos el diseno",
+      "expected_output": "Corre find antes de responder, cita las reglas activas que encuentra (por ejemplo la de frontend) y no vuelve a preguntar lo que ya esta guardado. Si no hay coincidencias, lo dice en vez de inventar memoria.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "cambio de idea: ahora si quiero tests antes de cada commit, antes te dije que no hacia falta",
+      "expected_output": "Busca la regla existente, propone reemplazarla y usa supersede (no update silencioso ni borrar). La nota vieja queda con status=superseded enlazada a la nueva, y ambas conservan la linea de historial con la fecha.",
+      "files": []
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 ---
 name: obsidian-memory
-description: Memoria persistente y agentica en el vault de Obsidian del usuario. Busca reglas y decisiones antes de trabajar, entrevista al usuario para capturar nuevas reglas o correcciones, actualiza o reemplaza reglas cuando cambian, y revisa la memoria para evitar que envejezca. Usar cuando el usuario diga "recuerda esto", "guarda en obsidian", "que recuerdes", "anota", "mis reglas", "mi memoria", "como trabajo", "que decidimos", "por que hicimos", o cuando corrija una preferencia, o al empezar una tarea en un proyecto ya conocido.
+description: Memoria persistente y agentica en el vault de Obsidian del usuario. Busca reglas y decisiones antes de trabajar, entrevista al usuario para capturar nuevas reglas o correcciones, actualiza o reemplaza reglas cuando cambian, y revisa la memoria para evitar que envejezca. Usala siempre que el usuario diga "recuerda esto", "guarda en obsidian", "que recuerdes", "anota", "mis reglas", "mi memoria", "como trabajo", "que decidimos", "por que hicimos", o cuando corrija una preferencia, y tambien al empezar una tarea en un proyecto con historial aunque no mencione Obsidian, y cuando dude sobre una convencion que ya se acordo antes. Si el usuario corrige tu trabajo o cambia de criterio, consultala antes de responder.
+license: MIT. Terminos completos en LICENSE.txt
 argument-hint: "recall <tema> | capture | review | promote"
 ---
 

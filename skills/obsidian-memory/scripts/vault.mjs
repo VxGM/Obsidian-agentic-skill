@@ -85,50 +85,87 @@ function unq(s) {
   return v;
 }
 
-function parseYaml(src) {
-  const fm = {};
-  let key = null;
+// Frontmatter: se parsea por entradas y se conservan las lineas crudas, para no
+// perder block scalars (| >), listas en bloque ni claves que no conocemos.
+function parseYamlEntries(src) {
+  const entries = [];
   for (const line of src.split(/\r?\n/)) {
-    const item = /^\s*-\s+(.*)$/.exec(line);
-    if (item && key) {
-      if (!Array.isArray(fm[key])) fm[key] = [];
-      fm[key].push(unq(item[1]));
-      continue;
-    }
-    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!kv) continue;
-    key = kv[1];
-    const val = kv[2].trim();
-    if (!val) { fm[key] = []; continue; }
-    if (val.startsWith('[') && val.endsWith(']')) {
-      fm[key] = val.slice(1, -1).split(',').map((s) => unq(s)).filter((s) => s !== '');
+    if (!line.trim()) continue;
+    const kv = /^([A-Za-z0-9_-]+):[ \t]*(.*)$/.exec(line);
+    if (kv) entries.push({ key: kv[1], raw: [line], inline: kv[2].trim() });
+    else if (entries.length) entries[entries.length - 1].raw.push(line);
+  }
+  return entries;
+}
+
+function entriesToFm(entries) {
+  const fm = {};
+  for (const e of entries) {
+    const cont = e.raw.slice(1).map((l) => l.replace(/^[ \t]+/, ''));
+    let val;
+    if (/^[|>][-+]?$/.test(e.inline)) {
+      val = cont.join('\n').trim();
+    } else if (!e.inline) {
+      val = cont.some((l) => /^-\s+/.test(l))
+        ? cont.map((l) => unq(l.replace(/^-\s+/, ''))).filter((s) => s !== '')
+        : cont.join('\n').trim();
+    } else if (e.inline.startsWith('[') && e.inline.endsWith(']')) {
+      val = e.inline.slice(1, -1).split(',').map((s) => unq(s)).filter((s) => s !== '');
     } else {
-      fm[key] = unq(val);
+      val = unq(e.inline);
     }
+    fm[e.key] = val;
   }
   return fm;
 }
 
 const FM_ORDER = ['tags', 'type', 'status', 'scope', 'confidence', 'created', 'updated', 'last_confirmed', 'supersedes', 'superseded_by', 'promoted_to', 'source'];
 
-function toYaml(fm) {
-  const lines = [];
-  const keys = [...FM_ORDER.filter((k) => fm[k] !== undefined && fm[k] !== ''), ...Object.keys(fm).filter((k) => !FM_ORDER.includes(k) && fm[k] !== undefined)];
-  for (const k of keys) {
-    const v = fm[k];
-    if (Array.isArray(v)) lines.push(`${k}: [${v.join(', ')}]`);
-    else if (/[:#\[\]{}]/.test(String(v))) lines.push(`${k}: "${String(v).replace(/"/g, "'")}"`);
-    else lines.push(`${k}: ${v}`);
+// Escapa solo cuando YAML lo exige. Antes se cambiaban las comillas por
+// apostrofes, lo que alteraba el texto del usuario.
+function yamlScalar(v) {
+  const s = String(v);
+  if (s === '') return '""';
+  const risky =
+    /^[\s\-?:,\[\]{}#&*!|>'"%@`]/.test(s) ||
+    /: |\s#|[\r\n]/.test(s) ||
+    /^(true|false|null|~)$/i.test(s);
+  if (!risky) return s;
+  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, '\\n') + '"';
+}
+
+function formatEntry(key, v) {
+  if (Array.isArray(v)) return [`${key}: [${v.map((x) => yamlScalar(x)).join(', ')}]`];
+  const s = String(v);
+  if (s.includes('\n')) return [`${key}: |`, ...s.split('\n').map((l) => '  ' + l)];
+  return [`${key}: ${yamlScalar(v)}`];
+}
+
+// Solo reescribe las claves que el comando toco; el resto del frontmatter se
+// emite tal como estaba.
+function toYaml(entries, fm, touched) {
+  const out = [];
+  const done = new Set();
+  for (const k of FM_ORDER) {
+    if (!touched.has(k) || fm[k] === undefined || fm[k] === '') continue;
+    out.push(...formatEntry(k, fm[k]));
+    done.add(k);
   }
-  return lines.join('\n');
+  for (const e of entries) {
+    if (done.has(e.key)) continue;
+    out.push(...e.raw);
+    done.add(e.key);
+  }
+  return out.join('\n');
 }
 
 function parseNote(file) {
   const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw);
-  const fm = m ? parseYaml(m[1]) : {};
+  const entries = m ? parseYamlEntries(m[1]) : [];
+  const fm = entriesToFm(entries);
   const body = m ? m[2] : raw;
-  return { file, title: path.basename(file, '.md'), fm, body, ...parseBody(body) };
+  return { file, title: path.basename(file, '.md'), fm, entries, body, ...parseBody(body) };
 }
 
 const LABEL_ALIASES = {
@@ -195,7 +232,7 @@ function listNotes(dir) {
       if (e.name.startsWith('.')) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
-      else if (e.name.toLowerCase().endsWith('.md')) acc.push(parseNote(p));
+      else if (e.name.toLowerCase().endsWith('.md') && e.name !== '_Index.md') acc.push(parseNote(p));
     }
   };
   walk(dir);
@@ -384,7 +421,7 @@ switch (cmd) {
     const file = path.join(dir, fname);
     if (fs.existsSync(file)) die(`Ya existe el archivo ${fname}.`);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(file, `---\n${toYaml(fm)}\n---\n\n${renderBody(note)}`, 'utf8');
+    fs.writeFileSync(file, `---\n${toYaml([], fm, new Set(Object.keys(fm)))}\n---\n\n${renderBody(note)}`, 'utf8');
     out({ ok: true, created: file, title: data.title, type, warnings: ruleText.length < 20 ? ['la regla es muy corta, revisa que sea explicita'] : [] });
     break;
   }
@@ -397,13 +434,26 @@ switch (cmd) {
     const n = findNote(notes, data.note);
     if (!n) die(`No encontre la nota "${data.note}".`);
     const fm = { ...n.fm };
+    const touched = new Set(['updated']);
     for (const k of ['type', 'status', 'scope', 'confidence', 'promoted_to', 'source']) {
-      if (data[k] !== undefined) fm[k] = data[k];
+      if (data[k] !== undefined) {
+        fm[k] = data[k];
+        touched.add(k);
+      }
     }
-    if (data.tags) fm.tags = Array.isArray(data.tags) ? data.tags : String(data.tags).split(',').map((s) => s.trim());
-    if (!Array.isArray(fm.tags)) fm.tags = fm.tags ? [fm.tags] : ['claude-memory'];
+    if (data.tags) {
+      fm.tags = Array.isArray(data.tags) ? data.tags : String(data.tags).split(',').map((s) => s.trim());
+      touched.add('tags');
+    }
+    if (!Array.isArray(fm.tags)) {
+      fm.tags = fm.tags ? [fm.tags] : ['claude-memory'];
+      touched.add('tags');
+    }
     fm.updated = today();
-    if (data.confirm || data.rule || data.why) fm.last_confirmed = today();
+    if (data.confirm || data.rule || data.why) {
+      fm.last_confirmed = today();
+      touched.add('last_confirmed');
+    }
 
     const blocks = n.blocks.map((b) => ({ ...b }));
     for (const [k, label] of [['rule', 'Regla'], ['why', 'Por qué'], ['applies', 'Cuándo aplica'], ['not_applies', 'Cuándo NO aplica'], ['verify', 'Cómo verificar']]) {
@@ -413,7 +463,7 @@ switch (cmd) {
     if (data.history) historial += `\n- ${today()} ${data.history}`;
     else historial += `\n- ${today()} actualizado`;
 
-    fs.writeFileSync(n.file, `---\n${toYaml(fm)}\n---\n\n${renderBody({ blocks, notas: data.notes !== undefined ? data.notes : n.notas, historial })}`, 'utf8');
+    fs.writeFileSync(n.file, `---\n${toYaml(n.entries, fm, touched)}\n---\n\n${renderBody({ blocks, notas: data.notes !== undefined ? data.notes : n.notas, historial })}`, 'utf8');
     out({ ok: true, updated: n.file, title: n.title, status: fm.status });
     break;
   }
@@ -427,10 +477,10 @@ switch (cmd) {
     if (oldN.file === newN.file) die('old y new son la misma nota.');
     const fmOld = { ...oldN.fm, status: 'superseded', superseded_by: `[[${newN.title}]]`, updated: today() };
     const histOld = `${oldN.historial}\n- ${today()} reemplazada por [[${newN.title}]]`.trim();
-    fs.writeFileSync(oldN.file, `---\n${toYaml(fmOld)}\n---\n\n${renderBody({ blocks: oldN.blocks, notas: oldN.notas, historial: histOld })}`, 'utf8');
+    fs.writeFileSync(oldN.file, `---\n${toYaml(oldN.entries, fmOld, new Set(['status', 'superseded_by', 'updated']))}\n---\n\n${renderBody({ blocks: oldN.blocks, notas: oldN.notas, historial: histOld })}`, 'utf8');
     const fmNew = { ...newN.fm, supersedes: `[[${oldN.title}]]`, updated: today() };
     const histNew = `${newN.historial}\n- ${today()} reemplaza a [[${oldN.title}]]`.trim();
-    fs.writeFileSync(newN.file, `---\n${toYaml(fmNew)}\n---\n\n${renderBody({ blocks: newN.blocks, notas: newN.notas, historial: histNew })}`, 'utf8');
+    fs.writeFileSync(newN.file, `---\n${toYaml(newN.entries, fmNew, new Set(['supersedes', 'updated']))}\n---\n\n${renderBody({ blocks: newN.blocks, notas: newN.notas, historial: histNew })}`, 'utf8');
     out({ ok: true, superseded: oldN.title, by: newN.title });
     break;
   }
