@@ -1,325 +1,335 @@
 ---
 name: obsidian-memory
-description: Memoria persistente y agentica en el vault de Obsidian del usuario. Busca reglas y decisiones antes de trabajar, entrevista al usuario para capturar nuevas reglas o correcciones, actualiza o reemplaza reglas cuando cambian, y revisa la memoria para evitar que envejezca. Usala siempre que el usuario diga "recuerda esto", "guarda en obsidian", "que recuerdes", "anota", "mis reglas", "mi memoria", "como trabajo", "que decidimos", "por que hicimos", o cuando corrija una preferencia, y tambien al empezar una tarea en un proyecto con historial aunque no mencione Obsidian, y cuando dude sobre una convencion que ya se acordo antes. Si el usuario corrige tu trabajo o cambia de criterio, consultala antes de responder.
-license: MIT. Terminos completos en LICENSE.txt
-argument-hint: "recall <tema> | capture | review | promote"
+description: Persistent, agentic memory in the user's Obsidian vault. Searches rules and decisions before starting work, interviews the user to capture new rules or corrections, updates or supersedes rules when they change, and reviews the memory so it does not rot. Use this skill whenever the user says "remember this", "save it to obsidian", "keep in mind", "note down", "my rules", "my memory", "how I work", "what did we decide", "why did we do it", whenever they correct a preference, whenever you start a task in a project that has history even if Obsidian is never mentioned, and whenever you are unsure about a convention that was agreed before. If the user corrects your work or changes their mind, consult it before replying.
+license: MIT. Full terms in LICENSE.txt
+argument-hint: "recall <topic> | capture | review | promote"
 ---
 
-# Memoria agentica en Obsidian
+# Agentic memory in Obsidian
 
-El vault es la memoria a largo plazo. Tu contexto se borra; el vault no.
-Objetivo doble: (1) no repetir errores ni volver a preguntar lo que ya se dijo,
-(2) que la memoria evolucione cuando el usuario cambia de criterio.
+The vault is the long-term memory. Your context is wiped; the vault is not.
+Two goals: (1) never repeat a mistake or ask again what was already said,
+(2) let the memory change when the user changes their mind.
 
-Todo pasa por un script sin dependencias. No requiere Obsidian abierto.
+Everything goes through a dependency-free script. Obsidian does not need to be
+running.
 
 ```
-$VM = <carpeta-de-esta-skill>/scripts/vault.mjs
+$VM = <this-skill-folder>/scripts/vault.mjs
 node $VM doctor
 ```
 
-Si `doctor` falla o resuelve el vault equivocado:
+If `doctor` fails or resolves the wrong vault:
 
 ```
-node $VM config --vault "C:\Users\<tu-usuario>\Obsidian\MiVault"
+node $VM config --vault "<path-to-vault>"
 ```
 
-`config` escribe en `~/.obsidian-memory.json` (configuracion de la maquina, no del
-proyecto). Si no puedes o no quieres tocarla, exporta `OBSIDIAN_VAULT` con la
-ruta del vault antes de cada comando: el script la respeta por encima de todo.
+`config` writes `~/.obsidian-memory.json` (machine config, not project). If you
+cannot or should not touch it, export `OBSIDIAN_VAULT` with the vault path before
+each command: the script honours it above everything else.
 
-El script imprime JSON. Lee `ok` antes de asumir que algo funciono.
+The script prints JSON. Check `ok` before assuming anything worked.
 
-## Regla de oro
+## Language
 
-**Nunca escribas en el vault sin haber hecho las preguntas.** Guardar una regla
-a medias es peor que no guardarla: queda como verdad falsa y se reutiliza.
+Answer the user in **their** language, always. Memory notes may be written in the
+user's language too: the script reads block labels in English, Spanish,
+Portuguese, French and German, and keeps whatever language each note already
+uses. New notes follow `config --labels <en|es|pt|fr|de>` (English by default).
 
-## 1. RECALL — antes de trabajar
+This file is in English so any agent can follow it; that does not mean you reply
+in English.
 
-Antes de tocar codigo en un proyecto con historial, o cuando el tema suene a algo
-ya discutido:
+## Golden rule
+
+**Never write to the vault without having asked the questions.** A half-written
+rule is worse than no rule: it stays as a false truth and gets reused.
+
+## 1. RECALL — before working
+
+Before touching code in a project with history, or when the topic sounds like
+something already discussed:
 
 ```
-node $VM find --query "<stack o tema>" --limit 6
+node $VM find --query "<stack or topic>" --limit 6
 node $VM find --type rule
-node $VM read --note "<titulo>"
+node $VM read --note "<title>"
 ```
 
-- `--query` busca en titulo, tags y cuerpo: es el que sirve para "acuerdate de X".
-- `--status active` filtra las vigentes. `find` **no** filtra por estado por
-  defecto: devuelve tambien las `superseded`, y tu trabajo es no citarlas como
-  ley vigente.
-- `--type` filtra por el campo `type`. Usa `--type rule` y tambien
-  `--type preference` / `decision` / `lesson`: **todas son restricciones**, no
-  solo las reglas. `--tag` es otra cosa: filtra el tag del frontmatter, y una
-  preferencia guardada como `[claude-memory, preference]` no aparece ahi.
-- Trata lo que devuelve como **restricciones activas**, no como sugerencias.
-  Una nota con `confidence` menor a 0.7 presentala como tentativa ("tengo
-  anotado que..."), no como ley.
-- Si una nota contradice lo que te acaban de pedir: **dilo**. "Esto contradice
-  [[Nota X]] — ¿la regla cambio?" No elijas en silencio.
-- Ignora notas con `status: superseded` salvo para entender historia.
-- Si no hay coincidencias, no inventes memoria. Sigue normal.
+- `--query` searches title, tags and body: this is the one for "remember X".
+- `--status active` filters live notes. `find` does **not** filter by status by
+  default: it also returns `superseded` notes, and your job is not to quote them
+  as current law.
+- `--type` filters the `type` field. Use `--type rule` and also
+  `--type preference` / `decision` / `lesson`: **they are all constraints**, not
+  just rules. `--tag` is a different thing: it filters the frontmatter tag, and a
+  preference stored as `[agent-memory, preference]` will not show up there.
+- Treat what comes back as **active constraints**, not suggestions. A note with
+  `confidence` below 0.7 should be presented as tentative ("I have a note that
+  says..."), not as law.
+- If a note contradicts what you were just asked: **say it**. "This contradicts
+  [[Note X]] — did the rule change?" Do not silently pick one.
+- Ignore `status: superseded` notes except to understand history.
+- If nothing matches, do not invent memory. Proceed normally.
 
-### Como responder un recall
+### How to answer a recall
 
-El usuario pregunto por su memoria, asi que el recall **es** la respuesta. No
-sigas "normal" en silencio: di que encontraste, con wikilink y de donde sale.
+The user asked about their memory, so the recall **is** the answer. Do not just
+proceed silently: say what you found, with wikilinks and where it comes from.
 
 ```
-En memoria hay 2 restricciones activas para la landing:
-- [[Landing estilo editorial]] (regla, confianza 0.9): tipografia display grande...
-- [[Sin gradientes genericos]] (preferencia, confianza 0.75): ...
-Lo que NO tengo guardado: stack, secciones ni copy. ¿Lo capturamos?
+The memory has 2 active constraints for the landing page:
+- [[Landing editorial style]] (rule, confidence 0.9): large display type...
+- [[No generic gradients]] (preference, confidence 0.75): ...
+What I do NOT have stored: stack, sections or copy. Shall we capture it?
 ```
 
-Si no hay nada, dilo en una linea y ofrece guardarlo. Nunca rellenes el hueco
-con una suposicion.
+If there is nothing, say so in one line and offer to store it. Never fill the
+gap with a guess.
 
-## 2. CAPTURE — que merece memoria
+## 2. CAPTURE — what deserves memory
 
-Guarda solo lo que cambia tu comportamiento en el futuro:
+Store only what changes your behaviour in the future:
 
-| Si | Entonces |
+| If the user | Then |
 |---|---|
-| Corrige tu trabajo ("no, asi no") | Regla nueva o actualizacion |
-| Explica el *por que* de una decision | Decision |
-| Dice como quiere el proceso (tests, commits, ramas, review) | Regla |
-| Cuenta un bug que ya paso antes | Leccion |
-| Prefiere una herramienta, estilo o arquitectura | Preferencia |
-| Habla de un proyecto concreto | Proyecto (`scope: <proyecto>`) |
+| Corrects your work ("no, not like that") | New rule or update |
+| Explains the *why* of a decision | Decision |
+| Describes how they want the process (tests, commits, branches, review) | Rule |
+| Mentions a bug that happened before | Lesson |
+| Prefers a tool, style or architecture | Preference |
+| Talks about a specific project | Project (`scope: <project>`) |
 
-**No guardes:** lo que pediste en el momento, obviedades del lenguaje, detalles
-efimeros ("ahora arregla el boton"), ni lo que ya esta en el codigo o en git.
+**Do not store:** what you asked for in the moment, language trivialities,
+ephemeral details ("now fix the button"), or anything already in the code or git.
 
-Un tema = una nota. Si una nota nueva trata dos cosas (un cambio de ORM es regla
-*y* decision), quedate con una sola: `type: rule` y el motivo en `**Por qué:**`.
-Duplicar el mismo tema en dos notas garantiza que se desincronicen.
+One topic = one note. If a new note would cover two things (an ORM change is a
+rule *and* a decision), keep one: `type: rule` with the reason in the `Why` block.
+Duplicating the same topic guarantees the two copies drift apart.
 
-## 3. INTERVIEW — como preguntar
+## 3. INTERVIEW — how to ask
 
-Una sola tanda. **Maximo 3 preguntas**, cortas, concretas, y solo las que faltan.
-Si ya lo dijo en la conversacion, no lo preguntes otra vez: usalo.
+One batch. **At most 3 questions**, short, concrete, and only the missing ones.
+If the user already said it in the conversation, do not ask again: use it.
 
-Preguntas obligatorias para una regla nueva:
-1. **¿Por que?** (sin esto la nota no sirve — no lo inventes nunca)
-2. **¿Cuando NO aplica?** (el limite evita que la regla se vuelva dogma)
-3. **¿Reemplaza algo que ya hacemos?** (`find --query` primero, y muestra el candidato)
+Mandatory questions for a new rule:
+1. **Why?** (without this the note is useless — never make it up)
+2. **When does it NOT apply?** (the limit stops the rule from becoming dogma)
+3. **Does it replace something we already do?** (`find --query` first, show the candidate)
 
-Preguntas utiles segun el caso:
-- "¿Aplica a todos los proyectos o solo a este?"
-- "¿Como me doy cuenta de que se cumplio?" (criterio verificable)
-- "¿Esto es regla firme o solo preferencia?"
+Useful questions depending on the case:
+- "Does this apply to every project or only this one?"
+- "How would I notice it was followed?" (a verifiable criterion)
+- "Is this a hard rule or just a preference?"
 
-Casos que la entrevista tiene que resolver sin bloquearte:
+Cases the interview must resolve without getting stuck:
 
-- **No hay `por que`.** Si el usuario no lo sabe o no lo da, **no escribas la
-  nota**: una regla sin motivo se vuelve dogma y no se puede revisar despues.
-  Ofrece guardarla como `confidence: 0.6` y `why: "sin definir"` solo si el
-  usuario lo acepta explicitamente.
-- **"Ninguno, siempre."** Es una respuesta valida pero deja el limite vacio.
-  Escribelo literal ("Ninguna, sin excepciones") y sube la `confidence`; no
-  inventes un limite que no existe.
-- **Sin criterio de verificacion.** Puedes derivarlo de la propia regla ("el
-  asunto del commit no contiene emoji") y decirlo como derivado. Si no sale,
-  dejalo vacio: `review` lo marcara despues, que es justo lo que quieres.
-- **Alcance ambiguo** ("commits sin emoji" ¿asunto o cuerpo?). Si cambia el
-  sentido de la regla, gasta una pregunta; si no, guarda lo que dijo y no
-  amplíes por tu cuenta.
+- **No `why`.** If the user does not know or will not say, **do not write the
+  note**: a rule without a reason becomes dogma and cannot be reviewed later.
+  Offer to store it as `confidence: 0.6` and `why: "undefined"` only if the user
+  explicitly accepts.
+- **"None, always."** It is a valid answer but leaves the limit empty. Write it
+  literally ("None, no exceptions") and raise `confidence`; do not invent a limit
+  that does not exist.
+- **No verification criterion.** You may derive one from the rule itself ("the
+  commit subject contains no emoji") and say it is derived. If nothing comes out,
+  leave it empty: `review` will flag it later, which is exactly what you want.
+- **Ambiguous scope** ("commits without emoji" — subject or body?). If it changes
+  the meaning of the rule, spend a question on it; if not, store what was said and
+  do not widen it on your own.
 
-Nunca mas de 3. Despues de guardar, muestra la nota en una linea y sigue.
+Never more than 3. After saving, show the note in one line and move on.
 
-## 4. ESCRIBIR
+## 4. WRITING
 
-El script espera un JSON por archivo: evita problemas de comillas y multilinea.
-Escribe el JSON con tu herramienta de escritura en un temporal y pasalo con `--json`.
+The script takes JSON from a file: it avoids quoting and multiline problems.
+Write the JSON with your file tool in a temp path and pass it with `--json`.
 
 ```json
 {
-  "title": "Tests antes de decir terminado",
+  "title": "Tests before saying done",
   "type": "rule",
-  "rule": "Correr build y tests antes de declarar una tarea terminada.",
-  "why": "Dos veces se declaro terminado con el build roto.",
-  "applies": "Cualquier cambio de codigo.",
-  "not_applies": "Docs o exploracion sin codigo.",
-  "verify": "build y tests terminan en 0.",
+  "rule": "Run the build and the tests before declaring a task finished.",
+  "why": "Twice a task was called done with a broken build.",
+  "applies": "Any code change.",
+  "not_applies": "Docs or exploration without code.",
+  "verify": "build and tests exit 0.",
   "scope": "global",
   "confidence": 0.9,
-  "source": "sesion 2026-11-04"
+  "source": "session 2026-11-04"
 }
 ```
 
 ```
-node $VM add --json "C:\ruta\temporal\nota.json"
-node $VM add --json nota.json --supersedes "Nota vieja"   # regla que reemplaza a otra
+node $VM add --json "C:\temp\note.json"
+node $VM add --json note.json --supersedes "Old note"   # rule that replaces another
 ```
 
-- `title` humano y en espanol, no slug. Se convierte en el nombre del archivo,
-  asi que dos notas no pueden compartir titulo (una nota que reemplaza a otra
-  lleva titulo distinto y se enlazan por `supersedes`/`superseded_by`).
-- `scope`: `global`, o el nombre del proyecto/stack.
-- `confidence`: 0.9 si lo dijo claro; 0.6 si lo deduces o dudo.
+- `title` human and in the user's language, not a slug. It becomes the file name,
+  so two notes cannot share a title (a note replacing another gets a different
+  title and they link through `supersedes`/`superseded_by`).
+- `scope`: `global`, or the project/stack name.
+- `confidence`: 0.9 if the user said it clearly; 0.6 if you inferred it or it is doubtful.
 - `type`: `rule`, `preference`, `decision`, `lesson`, `project`, `feedback`, `reference`.
-- Si el script responde `reason: "posible duplicado"`: **no uses `--force`**.
-  Lee el candidato y decide con el usuario:
-  - es la misma regla → `update`
-  - la reemplaza → `add --json ... --supersedes "<nota vieja>"` (crea la nueva y
-    marca la vieja en un solo paso; no choca con el dedupe)
-  - es otra cosa distinta → ahi si `--force`
+- If the script answers `reason: "possible duplicate..."`: **do not use `--force`**.
+  Read the candidate and decide with the user:
+  - same rule → `update`
+  - it replaces it → `add --json ... --supersedes "<old note>"` (creates the new
+    note and marks the old one in a single step; it does not bypass the dedupe)
+  - genuinely different → then `--force`
 
-### Patch de `update`
+### `update` patch
 
-`update` acepta estas claves; todo lo que no mandes queda como estaba:
+`update` accepts these keys; anything you leave out stays as it was:
 
 ```json
 {
-  "note": "Tests antes de decir terminado",
-  "rule": "texto nuevo de la regla (opcional)",
+  "note": "Tests before saying done",
+  "rule": "new rule text (optional)",
   "why": "...", "applies": "...", "not_applies": "...", "verify": "...",
-  "tags": ["claude-memory", "rule"],
+  "tags": ["agent-memory", "rule"],
   "type": "rule", "status": "active", "scope": "global", "confidence": 0.9,
-  "promoted_to": "<ruta>/AGENTS.md#seccion",
-  "frontmatter": { "description": "metadatos libres que quieras corregir" },
+  "promoted_to": "<path>/AGENTS.md#section",
+  "frontmatter": { "description": "free metadata you want to correct" },
   "confirm": true,
-  "history": "motivo que queda escrito en el Historial"
+  "history": "reason that gets written into History"
 }
 ```
 
-- `confirm: true` solo renueva `last_confirmed` (para `review`, sin cambiar texto).
-- `frontmatter` sirve para corregir claves libres (por ejemplo un `description`
-  que quedo desactualizado); no lo uses para meter campos inventados.
-- Si mandas `rule` distinto, el script guarda automaticamente el texto anterior
-  en `## Historial`. No hace falta que lo copies a mano.
-- `history` es el motivo legible de esta edicion. Usalo siempre que actualizas.
-- El script solo reescribe las claves que tocas y conserva el orden de los
-  bloques: las notas heredadas no se "normalizan".
+- `confirm: true` only refreshes `last_confirmed` (for `review`, no text change).
+- `frontmatter` corrects free keys (for example a stale `description`); do not
+  use it to inject invented fields.
+- If you send a different `rule`, the script automatically stores the previous
+  text in `## History`. You do not need to copy it by hand.
+- `history` is the readable reason for this edit. Use it every time you update.
+- The script only rewrites the keys you touch and keeps block order: inherited
+  notes are not "normalised".
 
-## 5. EVOLVE — cuando la regla cambia
+## 5. EVOLVE — when the rule changes
 
-Este es el punto que mantiene la memoria viva. Cuando el usuario cambia de idea:
+This is what keeps the memory alive. When the user changes their mind:
 
 ```
-node $VM update --json patch.json                      # misma regla, matiz nuevo
-node $VM add --json nueva.json --supersedes "A"        # la reemplaza (recomendado)
-node $VM supersede --old "A" --new "B"                 # si la nueva ya existe
+node $VM update --json patch.json                   # same rule, new nuance
+node $VM add --json new.json --supersedes "A"       # it replaces A (recommended)
+node $VM supersede --old "A" --new "B"              # if the new note already exists
 ```
 
-| Cambio | Como |
+| Change | How |
 |---|---|
-| Se aclara, se endurece, se agrega un limite | `update` |
-| Se amplía el alcance ("ahora tambien mobile") | `update` (mismo tema, no la reemplaza) |
-| Se invierte o contradice | `add --supersedes` |
-| Ya no aplica, sin reemplazo | `update` con `status: "deprecated"` |
+| Clarified, hardened, a new limit | `update` |
+| Scope widened ("now mobile too") | `update` (same topic, it does not replace it) |
+| Inverted or contradicted | `add --supersedes` |
+| No longer applies, no replacement | `update` with `status: "deprecated"` |
 
-- `supersede` / `--supersedes` marcan la vieja `superseded`, la enlazan con la
-  nueva y **no la borran**: la historia explica por que.
-- `update` deja el texto anterior en el historial si cambias `rule`.
-- No edites las notas a mano para "arreglar" esto: el script es el que mantiene
-  el historial y los enlaces consistentes.
+- `supersede` / `--supersedes` mark the old note `superseded`, link the two and
+  **do not delete it**: the history explains why.
+- `update` leaves the previous rule text in the history when you change `rule`.
+- Do not hand-edit notes to "fix" this: the script is what keeps history and
+  links consistent.
 
-### Notas que no son reglas
+### Notes that are not rules
 
-Algunas notas viejas son solo un puntero ("la regla vive en AGENTS.md") y no
-tienen `**Regla:**`. En ese caso **no inventes el texto de la regla**:
+Some old notes are just a pointer ("the operative rule lives in AGENTS.md") and
+have no `Rule` block. In that case **do not invent the rule text**:
 
-- Si el cambio es del puntero, actualiza solo `why`/`notas`.
-- Si hay una regla nueva de verdad, crea la nota con `add` (`type: rule`) y, si
-  corresponde, enlaza la vieja.
-- Si el puntero apunta a `AGENTS.md`, la memoria y el archivo operativo ahora
-  dicen cosas distintas: avisa y ofrece el bloque de `promote`. No edites
-  `AGENTS.md` sin permiso.
+- If the change is to the pointer, update only `why`/`notes`.
+- If there is a genuinely new rule, create the note with `add` (`type: rule`) and,
+  if it applies, link the old one.
+- If the pointer points at `AGENTS.md`, memory and the operative file now say
+  different things: say so and offer the `promote` block. Do not edit
+  `AGENTS.md` without permission.
 
-## 6. REVIEW — retencion
+## 6. REVIEW — retention
 
-Al cerrar una sesion de trabajo largo, o si el usuario dice "revisemos mi memoria":
+When closing a long work session, or if the user says "let's review my memory":
 
 ```
 node $VM review --days 60
 ```
 
-Devuelve notas viejas, de baja confianza o sin criterio de verificacion, y
-preguntas sugeridas. Hazle **solo 2 o 3** de esas preguntas, en una tanda.
-Clasifica cada respuesta:
-- Sigue valiendo → `update` con `{"note": "...", "confirm": true}`
-- Cambio → `update` con el texto nuevo
-- Ya no aplica → `supersede` o `status: "deprecated"`
-- Es obvio / ya esta en el codigo → candidato a borrar; pregunta antes.
+It returns old notes, low-confidence ones and ones with no verification
+criterion, plus suggested questions. Ask **only 2 or 3** of them, in one batch.
+Classify each answer:
+- Still valid → `update` with `{"note": "...", "confirm": true}`
+- Changed → `update` with the new text
+- No longer applies → `supersede` or `status: "deprecated"`
+- Obvious / already in the code → candidate for deletion; ask first.
 
-## 7. PROMOTE — de memoria a regla operativa
+## 7. PROMOTE — from memory to operative rule
 
-La memoria guarda el *por que*. Las reglas que el agente debe cumplir siempre
-van en `AGENTS.md` del usuario (fuente de verdad entre herramientas).
+Memory holds the *why*. Rules the agent must always follow belong in the user's
+`AGENTS.md` (the cross-tool source of truth).
 
 ```
 node $VM promote
 ```
 
-Devuelve un bloque markdown listo para pegar en `AGENTS.md`, con el wikilink a
-la nota de origen. Proponlo cuando una regla se repite o el usuario la pide
-"siempre". No edites `AGENTS.md` sin pedirlo.
+It returns a markdown block ready to paste into `AGENTS.md`, with the wikilink to
+the source note. Offer it when a rule keeps coming up or the user asks for
+"always". Do not edit `AGENTS.md` unless asked.
 
-**Limite:** solo promueve notas con `type: rule` o `type: preference` que tengan
-texto de regla. Si la nota es un puntero ("la regla operativa vive en
-AGENTS.md", tipicamente `type: feedback`), `promote` devuelve `count: 0` y no hay
-bloque que ofrecer: en ese caso dile al usuario que hay que editar `AGENTS.md` a
-mano, y deja el cambio registrado en `## Notas` / `## Historial` de la nota.
+**Limit:** it only promotes notes with `type: rule` or `type: preference` that
+have rule text. If the note is a pointer ("the operative rule lives in
+AGENTS.md", typically `type: feedback`), `promote` returns `count: 0` and there
+is no block to offer: tell the user `AGENTS.md` has to be edited by hand, and
+record the change in the note's `Notes` / `History` sections.
 
-## 8. MANTENER EL INDICE
+## 8. KEEPING THE INDEX
 
-Tras agregar o cambiar notas:
+After adding or changing notes:
 
 ```
 node $VM index
 ```
 
-Regenera `_Index.md` con links y el embed de la Base. No editar a mano.
+Regenerates `_Index.md` with links and the Base embed. Do not edit it by hand.
 
-## Limites duros
+## Hard limits
 
-- No toques `.obsidian/` ni archivos que no esten en la carpeta de memoria.
-- No borres notas ni reescribas prosa del usuario: `supersede` en vez de borrar.
-- Si el usuario dice "olvida esto": `status: "deprecated"` y explica por que se
-  conserva (historial). Borrar de verdad es decision suya.
-- Idioma: espanol, mismo tono que el usuario.
-- Si el script falla, reporta el error tal cual. No caigas a "escribir el
-  markdown a mano": rompe el dedupe y el indice.
+- Do not touch `.obsidian/` or files outside the memory folder.
+- Never delete notes or rewrite the user's prose: `supersede` instead of deleting.
+- If the user says "forget this": `status: "deprecated"` and explain why it is
+  kept (history). Actually deleting is their call.
+- If the script fails, report the error as-is. Do not fall back to "write the
+  markdown by hand": that breaks the dedupe and the index.
 
-## Esquema de una nota
+## Note schema
 
 ```
 ---
-tags: [claude-memory, <type>]
+tags: [agent-memory, <type>]
 type: rule | preference | decision | lesson | project | feedback | reference
 status: active | superseded | deprecated
-scope: global | <proyecto>
+scope: global | <project>
 confidence: 0-1
-created / updated / last_confirmed: AAAA-MM-DD
-supersedes / superseded_by: "[[Otra nota]]"
-promoted_to: "<ruta>/AGENTS.md#seccion"
-source: sesion AAAA-MM-DD
+created / updated / last_confirmed: YYYY-MM-DD
+supersedes / superseded_by: "[[Other note]]"
+promoted_to: "<path>/AGENTS.md#section"
+source: session YYYY-MM-DD
 ---
 ```
 
-Cuerpo: `**Regla:**`, `**Por qué:**`, `**Cuándo aplica:**`,
-`**Cuándo NO aplica:**`, `**Cómo verificar:**`, y opcional `## Notas` / `## Historial`.
-Las notas viejas con `**Why:**` u otras etiquetas se respetan: no las reescribas
-para "normalizarlas", el script ya maneja ambos formatos y conserva el orden de
-los bloques que ya existian.
+Body: `**Rule:**`, `**Why:**`, `**When it applies:**`,
+`**When it does NOT apply:**`, `**How to verify:**`, plus optional `## Notes` /
+`## History`. Notes written in another language are read and updated in place;
+their labels and headings are preserved. The tag follows whatever the vault
+already uses (`claude-memory` in older vaults, `agent-memory` otherwise).
 
-## Comandos
+## Commands
 
-| Comando | Para |
+| Command | For |
 |---|---|
-| `config --vault "<ruta>"` | fijar el vault una vez |
-| `vault` | ver que vault y carpeta usa |
-| `doctor` | estado, notas sin tags, duplicados |
-| `find --query "<t>" [--type] [--tag] [--status] [--limit]` | recall |
-| `read --note "<titulo o ruta>"` | leer completa |
-| `add --json <file>` | crear (falla si es duplicado) |
-| `add --json <file> --supersedes "<nota>"` | crear y reemplazar en un paso |
-| `update --json <file>` | matizar, reconfirmar, cambiar estado |
-| `supersede --old "<a>" --new "<b>"` | enlazar dos notas que ya existen |
-| `review --days N` | retencion y preguntas |
-| `promote` | bloque para AGENTS.md |
-| `index` | regenerar `_Index.md` |
+| `config --vault "<path>" [--labels es] [--tag x]` | pin the vault once |
+| `vault` | which vault and folder it uses |
+| `doctor` | status, untagged notes, duplicates |
+| `find --query "<q>" [--type] [--tag] [--status] [--limit]` | recall |
+| `read --note "<title or path>"` | read in full |
+| `add --json <file>` | create (fails on duplicates) |
+| `add --json <file> --supersedes "<note>"` | create and replace in one step |
+| `update --json <file>` | refine, reconfirm, change status |
+| `supersede --old "<a>" --new "<b>"` | link two notes that already exist |
+| `review --days N` | retention and suggested questions |
+| `promote` | block for AGENTS.md |
+| `index` | regenerate `_Index.md` |

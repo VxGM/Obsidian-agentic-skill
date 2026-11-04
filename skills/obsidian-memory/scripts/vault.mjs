@@ -24,12 +24,18 @@ function out(obj) {
   process.stdout.write(JSON.stringify(obj, null, 2) + '\n');
 }
 
-// Fecha local, no UTC: las notas son del usuario, no del servidor.
+// Local date, not UTC: the notes belong to the user, not to the server.
 const today = () => {
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
+
+// Language for new notes, set once with `config --labels es` (default English).
+function memoryLabelsLang() {
+  const l = readConfig().labels;
+  return l && LANG_LABELS[l] ? l : 'en';
+}
 
 function vaultConfigPath() {
   if (process.platform === 'win32') return path.join(process.env.APPDATA || '', 'obsidian', 'obsidian.json');
@@ -67,9 +73,9 @@ function resolveVault() {
         vaults.find((v) => v.open) ||
         vaults[0];
       if (pick) return pick.path;
-    } catch { /* ignora config corrupta */ }
+    } catch { /* ignore corrupt config */ }
   }
-  die('No resolvi el vault. Corre: node vault.mjs config --vault "<ruta>"');
+  die('Could not resolve the vault. Run: node vault.mjs config --vault "<path>"');
 }
 
 function memoryDir(vault) {
@@ -83,6 +89,21 @@ function memoryDir(vault) {
   return path.join(vault, 'Agent Memory');
 }
 
+// Tag for new notes: follows the convention the vault already uses, so a
+// memory folder created by another tool is not fragmented.
+let cachedTag = null;
+function memoryTag() {
+  if (cachedTag) return cachedTag;
+  const conf = readConfig();
+  if (conf.tag) return (cachedTag = conf.tag);
+  for (const n of listNotes(dir)) {
+    const tags = Array.isArray(n.fm.tags) ? n.fm.tags : [];
+    if (tags.includes('claude-memory')) return (cachedTag = 'claude-memory');
+    if (tags.includes('agent-memory')) return (cachedTag = 'agent-memory');
+  }
+  return (cachedTag = 'agent-memory');
+}
+
 // ---------- frontmatter ----------
 function unq(s) {
   let v = String(s).trim();
@@ -90,8 +111,8 @@ function unq(s) {
   return v;
 }
 
-// Frontmatter: se parsea por entradas y se conservan las lineas crudas, para no
-// perder block scalars (| >), listas en bloque ni claves que no conocemos.
+// Frontmatter is parsed as entries and the raw lines are kept, so block
+// scalars (| >), block lists and unknown keys are never lost.
 function parseYamlEntries(src) {
   const entries = [];
   for (const line of src.split(/\r?\n/)) {
@@ -178,17 +199,59 @@ function parseNote(file) {
   return { file, title: path.basename(file, '.md'), fm, entries, body, ...parseBody(body) };
 }
 
-const LABEL_ALIASES = {
-  regla: 'Regla', rule: 'Regla',
-  'por que': 'Por qué', 'por qué': 'Por qué', why: 'Por qué',
-  'cuando aplica': 'Cuándo aplica', 'cuándo aplica': 'Cuándo aplica',
-  'cuando no aplica': 'Cuándo NO aplica', 'cuándo no aplica': 'Cuándo NO aplica',
-  'como verificar': 'Cómo verificar', 'cómo verificar': 'Cómo verificar',
+// Canonical block names are English; notes keep whichever language they already
+// use. These aliases let notes written in any supported language be read and
+// updated in place, and the original label is always preserved on rewrite.
+const LANG_LABELS = {
+  en: { Rule: 'Rule', Why: 'Why', 'When it applies': 'When it applies', 'When it does NOT apply': 'When it does NOT apply', 'How to verify': 'How to verify', history: 'History', notes: 'Notes' },
+  es: { Rule: 'Regla', Why: 'Por qué', 'When it applies': 'Cuándo aplica', 'When it does NOT apply': 'Cuándo NO aplica', 'How to verify': 'Cómo verificar', history: 'Historial', notes: 'Notas' },
+  pt: { Rule: 'Regra', Why: 'Por quê', 'When it applies': 'Quando se aplica', 'When it does NOT apply': 'Quando NÃO se aplica', 'How to verify': 'Como verificar', history: 'Histórico', notes: 'Notas' },
+  fr: { Rule: 'Règle', Why: 'Pourquoi', 'When it applies': "Quand ça s'applique", 'When it does NOT apply': "Quand ça ne s'applique pas", 'How to verify': 'Comment vérifier', history: 'Historique', notes: 'Notes' },
+  de: { Rule: 'Regel', Why: 'Warum', 'When it applies': 'Wann gilt es', 'When it does NOT apply': 'Wann gilt es nicht', 'How to verify': 'Wie prüfen', history: 'Verlauf', notes: 'Notizen' },
 };
 
-function canonLabel(label) {
-  return LABEL_ALIASES[label.trim().toLowerCase()] || label.trim();
+const LABEL_ALIASES = { rule: 'Rule', reason: 'Why', verification: 'How to verify', 'por que': 'Why', 'when to use': 'When it applies' };
+for (const set of Object.values(LANG_LABELS)) {
+  for (const [canon, label] of Object.entries(set)) {
+    if (canon === 'history' || canon === 'notes') continue;
+    LABEL_ALIASES[label.trim().toLowerCase().replace(/\s+/g, ' ')] = canon;
+  }
 }
+
+function canonLabel(label) {
+  const key = label.trim().toLowerCase().replace(/\s+/g, ' ');
+  return LABEL_ALIASES[key] || label.trim();
+}
+
+const SECTION_ORDER = ['Rule', 'Why', 'When it applies', 'When it does NOT apply', 'How to verify'];
+
+// Which language does this note already speak? Only switches away from English
+// when there is positive evidence (labels or headings) of another language.
+function detectLang(blocks, headings = []) {
+  const texts = [...blocks.map((b) => b.label), ...headings.filter(Boolean)].map((t) => String(t).toLowerCase());
+  let best = 'en';
+  let bestScore = 0;
+  for (const [lang, set] of Object.entries(LANG_LABELS)) {
+    if (lang === 'en') continue;
+    const labels = [...SECTION_ORDER.map((c) => set[c]), set.history, set.notes].map((x) => x.toLowerCase());
+    const score = texts.filter((t) => labels.includes(t)).length;
+    if (score > bestScore) {
+      bestScore = score;
+      best = lang;
+    }
+  }
+  return best;
+}
+
+function labelFor(lang, canon) {
+  const set = LANG_LABELS[lang] || LANG_LABELS.en;
+  return set[canon] || canon;
+}
+
+const H2_ALIASES = {
+  history: Object.values(LANG_LABELS).map((s) => s.history.toLowerCase()),
+  notes: Object.values(LANG_LABELS).map((s) => s.notes.toLowerCase()),
+};
 
 function parseBody(body) {
   const parts = body.split(/^## /m);
@@ -199,19 +262,24 @@ function parseBody(body) {
     if (m) blocks.push({ label: m[1].trim(), canon: canonLabel(m[1]), text: m[2].trim() });
   }
   const tail = parts.length > 1 ? '## ' + parts.slice(1).join('## ') : '';
-  const grab = (name) => {
-    const r = new RegExp(`## ${name}\\r?\\n([\\s\\S]*?)(?=\\r?\\n## |$)`).exec(tail);
-    return r ? r[1].trim() : '';
+  const grab = (kind) => {
+    for (const alt of H2_ALIASES[kind]) {
+      const r = new RegExp(`## ${alt}\\r?\\n([\\s\\S]*?)(?=\\r?\\n## |$)`, 'i').exec(tail);
+      if (r) return { text: r[1].trim(), heading: r[0].split(/\r?\n/)[0].slice(3).trim() };
+    }
+    return { text: '', heading: null };
   };
+  const hist = grab('history');
+  const nt = grab('notes');
   return {
     blocks,
     sections: Object.fromEntries(blocks.map((b) => [b.canon, b.text])),
-    historial: grab('Historial'),
-    notas: grab('Notas'),
+    historial: hist.text,
+    historialHeading: hist.heading,
+    notas: nt.text,
+    notasHeading: nt.heading,
   };
 }
-
-const SECTION_ORDER = ['Regla', 'Por qué', 'Cuándo aplica', 'Cuándo NO aplica', 'Cómo verificar'];
 
 function setBlock(blocks, label, text) {
   const canon = canonLabel(label);
@@ -225,7 +293,7 @@ function setBlock(blocks, label, text) {
     blocks.push(entry);
     return;
   }
-  // Se inserta en su lugar canonico sin mover los bloques que ya existian.
+  // Inserts in canonical position without moving blocks that already existed.
   const next = blocks.find((b) => SECTION_ORDER.includes(b.canon) && SECTION_ORDER.indexOf(b.canon) > SECTION_ORDER.indexOf(canon));
   if (next) {
     blocks.splice(blocks.indexOf(next), 0, entry);
@@ -236,18 +304,17 @@ function setBlock(blocks, label, text) {
   else blocks.unshift(entry);
 }
 
-// Respeta el orden en que el usuario tenia sus bloques: solo se agregan los
-// nuevos, nunca se reordena lo que ya estaba.
+// Keeps the order the user had: new blocks are added, existing ones never move.
 function renderBody(note) {
   const blocks = (note.blocks || []).filter((b) => b.text);
   let body = blocks.map((b) => `**${b.label}:** ${b.text}`).join('\n\n');
   if (body) body += '\n';
-  if (note.notas) body += `\n## Notas\n${note.notas}\n`;
-  if (note.historial) body += `\n## Historial\n${note.historial}\n`;
+  if (note.notas) body += `\n## ${note.notasHeading || 'Notes'}\n${note.notas}\n`;
+  if (note.historial) body += `\n## ${note.historialHeading || 'History'}\n${note.historial}\n`;
   return body;
 }
 
-// ---------- indice ----------
+// ---------- index ----------
 function listNotes(dir) {
   if (!fs.existsSync(dir)) return [];
   const acc = [];
@@ -298,7 +365,7 @@ function brief(n) {
     type: n.fm.type || null,
     status: n.fm.status || 'active',
     scope: n.fm.scope || null,
-    rule: n.sections.Regla || null,
+    rule: n.sections.Rule || null,
     updated: n.fm.updated || null,
     path: n.file,
   };
@@ -332,15 +399,19 @@ function safeName(title) {
     .slice(0, 90);
 }
 
-// ---------- comandos ----------
+// ---------- commands ----------
 if (cmd === 'config') {
   const v = flag('vault');
-  if (!v || v === true) out({ ok: true, config_file: CONFIG_FILE, config: readConfig(), hint: 'Para fijar el vault: node vault.mjs config --vault "C:\\ruta\\al\\vault"' });
+  if (!v || v === true) out({ ok: true, config_file: CONFIG_FILE, config: readConfig(), hint: 'To pin the vault: node vault.mjs config --vault "<path-to-vault>"' });
   else {
-    if (!fs.existsSync(v)) die(`Esa ruta no existe: ${v}`);
+    if (!fs.existsSync(v)) die(`That path does not exist: ${v}`);
     const conf = { vault: path.resolve(v) };
     const md = flag('memory-dir');
     if (md && md !== true) conf.memory_dir = md;
+    const lb = flag('labels');
+    if (lb && lb !== true) conf.labels = lb;
+    const tg = flag('tag');
+    if (tg && tg !== true) conf.tag = tg;
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(conf, null, 2), 'utf8');
     out({ ok: true, saved: CONFIG_FILE, config: conf, memory_dir: memoryDir(conf.vault) });
   }
@@ -361,10 +432,10 @@ switch (cmd) {
     const warnings = [];
     for (const n of notes) {
       const tags = Array.isArray(n.fm.tags) ? n.fm.tags : [];
-      if (!tags.length) warnings.push({ title: n.title, issue: 'sin tags (deberia tener [claude-memory, <tipo>])' });
-      if (!n.fm.type) warnings.push({ title: n.title, issue: 'sin type' });
-      if (!n.fm.status) warnings.push({ title: n.title, issue: 'sin status (se asume active)' });
-      if (!n.sections.Regla && !n.sections['Por qué']) warnings.push({ title: n.title, issue: 'sin seccion Regla/Por que' });
+      if (!tags.length) warnings.push({ title: n.title, issue: 'no tags (expected [agent-memory, <type>])' });
+      if (!n.fm.type) warnings.push({ title: n.title, issue: 'no type' });
+      if (!n.fm.status) warnings.push({ title: n.title, issue: 'no status (defaults to active)' });
+      if (!n.sections.Rule && !n.sections.Why) warnings.push({ title: n.title, issue: 'missing a Rule/Why section' });
     }
     const titles = new Map();
     for (const n of notes) titles.set(norm(n.title), (titles.get(norm(n.title)) || 0) + 1);
@@ -375,7 +446,7 @@ switch (cmd) {
       memory_dir: dir,
       notes: notes.length,
       by_status: notes.reduce((a, n) => ((a[n.fm.status || 'active'] = (a[n.fm.status || 'active'] || 0) + 1), a), {}),
-      by_type: notes.reduce((a, n) => ((a[n.fm.type || 'sin-tipo'] = (a[n.fm.type || 'sin-tipo'] || 0) + 1), a), {}),
+      by_type: notes.reduce((a, n) => ((a[n.fm.type || 'untyped'] = (a[n.fm.type || 'untyped'] || 0) + 1), a), {}),
       duplicate_titles: dups,
       warnings,
     });
@@ -394,27 +465,27 @@ switch (cmd) {
   case 'read': {
     const notes = listNotes(dir);
     const n = findNote(notes, flag('note'));
-    if (!n) die(`No encontre la nota "${flag('note')}".`);
+    if (!n) die(`Note not found: "${flag('note')}".`);
     out({ ok: true, ...brief(n), frontmatter: n.fm, body: n.body.trim() });
     break;
   }
 
   case 'add': {
     const jf = flag('json');
-    if (!jf || jf === true) die('Falta --json <archivo.json>.');
+    if (!jf || jf === true) die('Missing --json <file.json>.');
     const data = JSON.parse(fs.readFileSync(path.resolve(jf), 'utf8'));
-    if (!data.title) die('El JSON necesita "title".');
+    if (!data.title) die('The JSON needs a "title".');
     const type = data.type || 'rule';
     const ruleText = data.rule || data.title;
     const notes = listNotes(dir);
 
-    // --supersedes "<nota vieja>": crea la nota que reemplaza y marca la vieja,
-    // sin chocar con el detector de duplicados (era el callejon sin salida).
+    // --supersedes "<old note>": creates the replacement and marks the old one,
+    // without tripping the duplicate detector (that was the dead end).
     let oldN = null;
     const supRef = flag('supersedes');
     if (supRef && supRef !== true) {
       oldN = findNote(notes, supRef);
-      if (!oldN) die(`No encontre la nota a reemplazar "${supRef}".`);
+      if (!oldN) die(`Note to supersede not found: "${supRef}".`);
     }
 
     const dups = notes
@@ -427,17 +498,17 @@ switch (cmd) {
     if (dups.length && !flag('force')) {
       out({
         ok: false,
-        reason: 'posible duplicado o regla ya existente',
-        candidates: dups.slice(0, 3).map((d) => ({ similitud: Number(d.sim.toFixed(2)), ...brief(d.n) })),
+        reason: 'possible duplicate or rule already stored',
+        candidates: dups.slice(0, 3).map((d) => ({ similarity: Number(d.sim.toFixed(2)), ...brief(d.n) })),
         hint: oldN
-          ? 'Quedan otras notas parecidas ademas de la que reemplazas: revisa los candidatos antes de forzar.'
-          : 'Si es la misma regla: update. Si la reemplaza: add --supersedes "<nota vieja>". Si de verdad es otra: --force.',
+          ? 'There are other similar notes besides the one you are superseding: review the candidates before forcing.'
+          : 'Same rule: use update. It replaces it: add --supersedes "<old note>". Genuinely different: --force.',
       });
       process.exit(1);
     }
 
     const fm = {
-      tags: ['claude-memory', type],
+      tags: [memoryTag(), type],
       type,
       status: data.status || 'active',
       scope: data.scope || 'global',
@@ -447,41 +518,44 @@ switch (cmd) {
       last_confirmed: today(),
       supersedes: oldN ? `[[${oldN.title}]]` : data.supersedes || '',
       promoted_to: data.promoted_to || '',
-      source: data.source || 'sesion',
+      source: data.source || 'session',
     };
     const blocks = [];
-    setBlock(blocks, 'Regla', ruleText);
-    for (const [k, label] of [['why', 'Por qué'], ['applies', 'Cuándo aplica'], ['not_applies', 'Cuándo NO aplica'], ['verify', 'Cómo verificar']]) {
-      if (data[k]) setBlock(blocks, label, data[k]);
+    const lang = memoryLabelsLang();
+    setBlock(blocks, labelFor(lang, 'Rule'), ruleText);
+    for (const [k, label] of [['why', 'Why'], ['applies', 'When it applies'], ['not_applies', 'When it does NOT apply'], ['verify', 'How to verify']]) {
+      if (data[k]) setBlock(blocks, labelFor(lang, label), data[k]);
     }
     const note = {
       blocks,
       notas: data.notes || '',
-      historial: `- ${today()} creado (${data.source || 'sesion'})`,
+      notasHeading: lang === 'en' ? null : labelFor(lang, 'notes'),
+      historial: `- ${today()} created (${data.source || 'session'})`,
+      historialHeading: lang === 'en' ? null : labelFor(lang, 'history'),
     };
     const fname = safeName(data.title) + '.md';
     const file = path.join(dir, fname);
-    if (fs.existsSync(file)) die(`Ya existe el archivo ${fname}.`);
+    if (fs.existsSync(file)) die(`File already exists: ${fname}.`);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(file, `---\n${toYaml([], fm, new Set(Object.keys(fm)))}\n---\n\n${renderBody(note)}`, 'utf8');
 
     if (oldN) {
       const fmOld = { ...oldN.fm, status: 'superseded', superseded_by: `[[${data.title}]]`, updated: today() };
-      const histOld = `${oldN.historial}\n- ${today()} reemplazada por [[${data.title}]]`.trim();
-      fs.writeFileSync(oldN.file, `---\n${toYaml(oldN.entries, fmOld, new Set(['status', 'superseded_by', 'updated']))}\n---\n\n${renderBody({ blocks: oldN.blocks, notas: oldN.notas, historial: histOld })}`, 'utf8');
+      const histOld = `${oldN.historial}\n- ${today()} superseded by [[${data.title}]]`.trim();
+      fs.writeFileSync(oldN.file, `---\n${toYaml(oldN.entries, fmOld, new Set(['status', 'superseded_by', 'updated']))}\n---\n\n${renderBody({ blocks: oldN.blocks, notas: oldN.notas, notasHeading: oldN.notasHeading, historial: histOld, historialHeading: oldN.historialHeading })}`, 'utf8');
     }
 
-    out({ ok: true, created: file, title: data.title, type, superseded: oldN ? oldN.title : null, warnings: ruleText.length < 20 ? ['la regla es muy corta, revisa que sea explicita'] : [] });
+    out({ ok: true, created: file, title: data.title, type, superseded: oldN ? oldN.title : null, warnings: ruleText.length < 20 ? ['rule text is very short, make it explicit'] : [] });
     break;
   }
 
   case 'update': {
     const jf = flag('json');
-    if (!jf || jf === true) die('Falta --json <archivo.json>.');
+    if (!jf || jf === true) die('Missing --json <file.json>.');
     const data = JSON.parse(fs.readFileSync(path.resolve(jf), 'utf8'));
     const notes = listNotes(dir);
     const n = findNote(notes, data.note);
-    if (!n) die(`No encontre la nota "${data.note}".`);
+    if (!n) die(`Note not found: "${data.note}".`);
     const fm = { ...n.fm };
     const touched = new Set(['updated']);
     for (const k of ['type', 'status', 'scope', 'confidence', 'promoted_to', 'source']) {
@@ -502,7 +576,7 @@ switch (cmd) {
       }
     }
     if (!Array.isArray(fm.tags)) {
-      fm.tags = fm.tags ? [fm.tags] : ['claude-memory'];
+      fm.tags = fm.tags ? [fm.tags] : [memoryTag()];
       touched.add('tags');
     }
     fm.updated = today();
@@ -512,19 +586,20 @@ switch (cmd) {
     }
 
     const blocks = n.blocks.map((b) => ({ ...b }));
-    for (const [k, label] of [['rule', 'Regla'], ['why', 'Por qué'], ['applies', 'Cuándo aplica'], ['not_applies', 'Cuándo NO aplica'], ['verify', 'Cómo verificar']]) {
-      if (data[k] !== undefined) setBlock(blocks, label, data[k]);
+    const lang = detectLang(n.blocks, [n.notasHeading, n.historialHeading]);
+    for (const [k, label] of [['rule', 'Rule'], ['why', 'Why'], ['applies', 'When it applies'], ['not_applies', 'When it does NOT apply'], ['verify', 'How to verify']]) {
+      if (data[k] !== undefined) setBlock(blocks, labelFor(lang, label), data[k]);
     }
     let historial = n.historial;
-    // Si se reescribe la regla, el texto anterior queda en el historial: update
-    // nunca debe borrar lo que decia antes sin dejar rastro.
-    if (data.rule !== undefined && n.sections.Regla && data.rule.trim() !== n.sections.Regla.trim()) {
-      historial += `\n- ${today()} regla anterior: "${n.sections.Regla.replace(/"/g, "'")}"`;
+    // If the rule text is rewritten, the previous text goes to History:
+    // update must never erase what it said before without a trace.
+    if (data.rule !== undefined && n.sections.Rule && data.rule.trim() !== n.sections.Rule.trim()) {
+      historial += `\n- ${today()} previous rule text: "${n.sections.Rule.replace(/"/g, "'")}"`;
     }
     if (data.history) historial += `\n- ${today()} ${data.history}`;
-    else historial += `\n- ${today()} actualizado`;
+    else historial += `\n- ${today()} updated`;
 
-    fs.writeFileSync(n.file, `---\n${toYaml(n.entries, fm, touched)}\n---\n\n${renderBody({ blocks, notas: data.notes !== undefined ? data.notes : n.notas, historial })}`, 'utf8');
+    fs.writeFileSync(n.file, `---\n${toYaml(n.entries, fm, touched)}\n---\n\n${renderBody({ blocks, notas: data.notes !== undefined ? data.notes : n.notas, notasHeading: n.notasHeading, historial, historialHeading: n.historialHeading })}`, 'utf8');
     out({ ok: true, updated: n.file, title: n.title, status: fm.status });
     break;
   }
@@ -533,37 +608,39 @@ switch (cmd) {
     const notes = listNotes(dir);
     const oldN = findNote(notes, flag('old'));
     const newN = findNote(notes, flag('new'));
-    if (!oldN) die(`No encontre la nota vieja "${flag('old')}".`);
-    if (!newN) die(`No encontre la nota nueva "${flag('new')}".`);
-    if (oldN.file === newN.file) die('old y new son la misma nota.');
+    if (!oldN) die(`Old note not found: "${flag('old')}".`);
+    if (!newN) die(`New note not found: "${flag('new')}".`);
+    if (oldN.file === newN.file) die('old and new are the same note.');
     const fmOld = { ...oldN.fm, status: 'superseded', superseded_by: `[[${newN.title}]]`, updated: today() };
-    const histOld = `${oldN.historial}\n- ${today()} reemplazada por [[${newN.title}]]`.trim();
-    fs.writeFileSync(oldN.file, `---\n${toYaml(oldN.entries, fmOld, new Set(['status', 'superseded_by', 'updated']))}\n---\n\n${renderBody({ blocks: oldN.blocks, notas: oldN.notas, historial: histOld })}`, 'utf8');
+    const histOld = `${oldN.historial}\n- ${today()} superseded by [[${newN.title}]]`.trim();
+    fs.writeFileSync(oldN.file, `---\n${toYaml(oldN.entries, fmOld, new Set(['status', 'superseded_by', 'updated']))}\n---\n\n${renderBody({ blocks: oldN.blocks, notas: oldN.notas, notasHeading: oldN.notasHeading, historial: histOld, historialHeading: oldN.historialHeading })}`, 'utf8');
     const fmNew = { ...newN.fm, supersedes: `[[${oldN.title}]]`, updated: today() };
-    const histNew = `${newN.historial}\n- ${today()} reemplaza a [[${oldN.title}]]`.trim();
-    fs.writeFileSync(newN.file, `---\n${toYaml(newN.entries, fmNew, new Set(['supersedes', 'updated']))}\n---\n\n${renderBody({ blocks: newN.blocks, notas: newN.notas, historial: histNew })}`, 'utf8');
+    const histNew = `${newN.historial}\n- ${today()} supersedes [[${oldN.title}]]`.trim();
+    fs.writeFileSync(newN.file, `---\n${toYaml(newN.entries, fmNew, new Set(['supersedes', 'updated']))}\n---\n\n${renderBody({ blocks: newN.blocks, notas: newN.notas, notasHeading: newN.notasHeading, historial: histNew, historialHeading: newN.historialHeading })}`, 'utf8');
     out({ ok: true, superseded: oldN.title, by: newN.title });
     break;
   }
 
   case 'review': {
     const days = Number(flag('days', 60));
-    const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+    const cutoff = new Date(Date.now() - days * 86400000);
+    const p = (n) => String(n).padStart(2, '0');
+    const cutoffStr = `${cutoff.getFullYear()}-${p(cutoff.getMonth() + 1)}-${p(cutoff.getDate())}`;
     const notes = listNotes(dir);
-    const stale = notes.filter((n) => (n.fm.status || 'active') === 'active' && (n.fm.last_confirmed || n.fm.updated || '1970-01-01') < cutoff);
+    const stale = notes.filter((n) => (n.fm.status || 'active') === 'active' && (n.fm.last_confirmed || n.fm.updated || '1970-01-01') < cutoffStr);
     const weak = notes.filter((n) => (n.fm.status || 'active') === 'active' && Number(n.fm.confidence ?? 1) < 0.7);
-    const noVerify = notes.filter((n) => (n.fm.status || 'active') === 'active' && !n.sections['Cómo verificar']);
+    const noVerify = notes.filter((n) => (n.fm.status || 'active') === 'active' && !n.sections['How to verify']);
     out({
       ok: true,
-      cutoff,
+      cutoff: cutoffStr,
       total_active: notes.filter((n) => (n.fm.status || 'active') === 'active').length,
       stale: stale.map(brief),
       low_confidence: weak.map(brief),
-      sin_criterio_de_verificacion: noVerify.map(brief),
-      preguntas_sugeridas: [
-        '¿Cuales de estas reglas ya no reflejan como trabajas hoy?',
-        '¿Alguna de estas se volvio obvia y deberia pasar a AGENTS.md y borrarse de la memoria?',
-        '¿Cual de estas cambio en los ultimos meses y la nota sigue vieja?',
+      no_verification: noVerify.map(brief),
+      suggested_questions: [
+        'Which of these rules no longer reflect how you work today?',
+        'Which of these became obvious and should move to AGENTS.md and leave the memory?',
+        'Which of these changed in the last months while the note stayed old?',
       ],
     });
     break;
@@ -576,19 +653,19 @@ switch (cmd) {
     const byScope = {};
     for (const n of notes) (byScope[n.fm.scope || 'global'] ||= []).push(n);
     const md = Object.entries(byScope)
-      .map(([scope, list]) => `### ${scope}\n` + list.map((n) => `- ${n.sections.Regla || n.title}  <!-- [[${n.title}]] -->`).join('\n'))
+      .map(([scope, list]) => `### ${scope}\n` + list.map((n) => `- ${n.sections.Rule || n.title}  <!-- [[${n.title}]] -->`).join('\n'))
       .join('\n\n');
-    out({ ok: true, count: notes.length, bloque_agents_md: md });
+    out({ ok: true, count: notes.length, agents_md_block: md });
     break;
   }
 
   case 'index': {
     const notes = listNotes(dir);
     const byType = {};
-    for (const n of notes) (byType[n.fm.type || 'sin-tipo'] ||= []).push(n);
+    for (const n of notes) (byType[n.fm.type || 'untyped'] ||= []).push(n);
     const base = path.join(dir, path.basename(dir) + '.base');
-    let md = '---\ntags: [claude-memory, index]\n---\n\n# Memoria de agentes\n\n';
-    md += 'Indice auto-generado por la skill `obsidian-memory`. No editar a mano.\n\n';
+    let md = `---\ntags: [${memoryTag()}, index]\n---\n\n# Agent memory\n\n`;
+    md += 'Auto-generated by the `obsidian-memory` skill. Do not edit by hand.\n\n';
     if (fs.existsSync(base)) md += `![[${path.basename(base, '.base')}.base]]\n\n`;
     for (const [type, list] of Object.entries(byType).sort()) {
       md += `## ${type} (${list.length})\n`;
@@ -605,5 +682,5 @@ switch (cmd) {
   }
 
   default:
-    die('Comandos: config | vault | doctor | find | read | add [--supersedes "<nota>"] | update | supersede | review | promote | index');
+    die('Commands: config | vault | doctor | find | read | add [--supersedes "<note>"] | update | supersede | review | promote | index');
 }
