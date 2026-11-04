@@ -21,7 +21,7 @@ proyecto actual.
 Elegir agente o nombre explicito:
 
 ```bash
-npx skills add VxGM/Obsidian-agentic-skill --skill obsidian-memory -a claude-code -a codex -g
+npx skills add VxGM/Obsidian-agentic-skill --skill obsidian-memory -a <agente> -g
 ```
 
 Sin prompts (CI o instalacion rapida):
@@ -102,7 +102,7 @@ scope: global | <proyecto>
 confidence: 0.9
 created / updated / last_confirmed: 2026-11-04
 supersedes / superseded_by: "[[Otra nota]]"
-promoted_to: "C:\Users\ASUS\AGENTS.md#seccion"
+promoted_to: "<ruta>/AGENTS.md#seccion"
 ```
 
 Cuerpo: `**Regla:**`, `**Por qué:**`, `**Cuándo aplica:**`,

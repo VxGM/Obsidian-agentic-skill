@@ -20,7 +20,7 @@ node $VM doctor
 Si `doctor` falla o resuelve el vault equivocado:
 
 ```
-node $VM config --vault "C:\Users\ASUS\Obsidian\PP"
+node $VM config --vault "C:\Users\<tu-usuario>\Obsidian\MiVault"
 ```
 
 El script imprime JSON. Lee `ok` antes de asumir que algo funciono.
@@ -189,7 +189,7 @@ scope: global | <proyecto>
 confidence: 0-1
 created / updated / last_confirmed: AAAA-MM-DD
 supersedes / superseded_by: "[[Otra nota]]"
-promoted_to: "C:\Users\ASUS\AGENTS.md#seccion"
+promoted_to: "<ruta>/AGENTS.md#seccion"
 source: sesion AAAA-MM-DD
 ---
 ```
