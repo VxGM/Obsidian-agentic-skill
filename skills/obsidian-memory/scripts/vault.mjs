@@ -24,7 +24,12 @@ function out(obj) {
   process.stdout.write(JSON.stringify(obj, null, 2) + '\n');
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
+// Fecha local, no UTC: las notas son del usuario, no del servidor.
+const today = () => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
 
 function vaultConfigPath() {
   if (process.platform === 'win32') return path.join(process.env.APPDATA || '', 'obsidian', 'obsidian.json');
@@ -141,20 +146,25 @@ function formatEntry(key, v) {
   return [`${key}: ${yamlScalar(v)}`];
 }
 
-// Solo reescribe las claves que el comando toco; el resto del frontmatter se
-// emite tal como estaba.
+// Reescribe las claves tocadas en su sitio; el resto se emite tal cual estaba.
 function toYaml(entries, fm, touched) {
   const out = [];
-  const done = new Set();
-  for (const k of FM_ORDER) {
-    if (!touched.has(k) || fm[k] === undefined || fm[k] === '') continue;
-    out.push(...formatEntry(k, fm[k]));
-    done.add(k);
-  }
+  const written = new Set();
   for (const e of entries) {
-    if (done.has(e.key)) continue;
-    out.push(...e.raw);
-    done.add(e.key);
+    if (!touched.has(e.key)) {
+      out.push(...e.raw);
+      continue;
+    }
+    written.add(e.key);
+    if (fm[e.key] !== undefined && fm[e.key] !== '') out.push(...formatEntry(e.key, fm[e.key]));
+  }
+  for (const k of FM_ORDER) {
+    if (touched.has(k) && !written.has(k) && fm[k] !== undefined && fm[k] !== '') out.push(...formatEntry(k, fm[k]));
+  }
+  // Claves libres del frontmatter (description, etc.) que el comando toco.
+  for (const k of touched) {
+    if (written.has(k) || FM_ORDER.includes(k)) continue;
+    if (fm[k] !== undefined && fm[k] !== '') out.push(...formatEntry(k, fm[k]));
   }
   return out.join('\n');
 }
@@ -206,17 +216,31 @@ const SECTION_ORDER = ['Regla', 'Por qué', 'Cuándo aplica', 'Cuándo NO aplica
 function setBlock(blocks, label, text) {
   const canon = canonLabel(label);
   const found = blocks.find((b) => b.canon === canon);
-  if (found) found.text = text;
-  else blocks.push({ label, canon, text });
+  if (found) {
+    found.text = text;
+    return;
+  }
+  const entry = { label, canon, text };
+  if (!SECTION_ORDER.includes(canon)) {
+    blocks.push(entry);
+    return;
+  }
+  // Se inserta en su lugar canonico sin mover los bloques que ya existian.
+  const next = blocks.find((b) => SECTION_ORDER.includes(b.canon) && SECTION_ORDER.indexOf(b.canon) > SECTION_ORDER.indexOf(canon));
+  if (next) {
+    blocks.splice(blocks.indexOf(next), 0, entry);
+    return;
+  }
+  const lastKnown = [...blocks].reverse().find((b) => SECTION_ORDER.includes(b.canon));
+  if (lastKnown) blocks.splice(blocks.indexOf(lastKnown) + 1, 0, entry);
+  else blocks.unshift(entry);
 }
 
-// Preserva etiquetas y secciones desconocidas tal cual (notas viejas con **Why:**, **Operative rule...:**)
+// Respeta el orden en que el usuario tenia sus bloques: solo se agregan los
+// nuevos, nunca se reordena lo que ya estaba.
 function renderBody(note) {
   const blocks = (note.blocks || []).filter((b) => b.text);
-  const known = blocks.filter((b) => SECTION_ORDER.includes(b.canon));
-  const rest = blocks.filter((b) => !SECTION_ORDER.includes(b.canon));
-  known.sort((a, b) => SECTION_ORDER.indexOf(a.canon) - SECTION_ORDER.indexOf(b.canon));
-  let body = [...known, ...rest].map((b) => `**${b.label}:** ${b.text}`).join('\n\n');
+  let body = blocks.map((b) => `**${b.label}:** ${b.text}`).join('\n\n');
   if (body) body += '\n';
   if (note.notas) body += `\n## Notas\n${note.notas}\n`;
   if (note.historial) body += `\n## Historial\n${note.historial}\n`;
@@ -383,14 +407,32 @@ switch (cmd) {
     const type = data.type || 'rule';
     const ruleText = data.rule || data.title;
     const notes = listNotes(dir);
+
+    // --supersedes "<nota vieja>": crea la nota que reemplaza y marca la vieja,
+    // sin chocar con el detector de duplicados (era el callejon sin salida).
+    let oldN = null;
+    const supRef = flag('supersedes');
+    if (supRef && supRef !== true) {
+      oldN = findNote(notes, supRef);
+      if (!oldN) die(`No encontre la nota a reemplazar "${supRef}".`);
+    }
+
     const dups = notes
       .filter((n) => (n.fm.status || 'active') !== 'superseded')
+      .filter((n) => !oldN || n.file !== oldN.file)
       .map((n) => ({ n, sim: Math.max(jaccard(n.title, data.title), jaccard(n.sections.Regla || '', ruleText)) }))
       .filter((x) => x.sim >= 0.6 || norm(x.n.title) === norm(data.title))
       .sort((a, b) => b.sim - a.sim);
 
     if (dups.length && !flag('force')) {
-      out({ ok: false, reason: 'posible duplicado o regla ya existente', candidates: dups.slice(0, 3).map((d) => ({ similitud: Number(d.sim.toFixed(2)), ...brief(d.n) })), hint: 'Actualiza la nota existente (update / supersede) o repite con --force.' });
+      out({
+        ok: false,
+        reason: 'posible duplicado o regla ya existente',
+        candidates: dups.slice(0, 3).map((d) => ({ similitud: Number(d.sim.toFixed(2)), ...brief(d.n) })),
+        hint: oldN
+          ? 'Quedan otras notas parecidas ademas de la que reemplazas: revisa los candidatos antes de forzar.'
+          : 'Si es la misma regla: update. Si la reemplaza: add --supersedes "<nota vieja>". Si de verdad es otra: --force.',
+      });
       process.exit(1);
     }
 
@@ -403,7 +445,7 @@ switch (cmd) {
       created: today(),
       updated: today(),
       last_confirmed: today(),
-      supersedes: data.supersedes || '',
+      supersedes: oldN ? `[[${oldN.title}]]` : data.supersedes || '',
       promoted_to: data.promoted_to || '',
       source: data.source || 'sesion',
     };
@@ -422,7 +464,14 @@ switch (cmd) {
     if (fs.existsSync(file)) die(`Ya existe el archivo ${fname}.`);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(file, `---\n${toYaml([], fm, new Set(Object.keys(fm)))}\n---\n\n${renderBody(note)}`, 'utf8');
-    out({ ok: true, created: file, title: data.title, type, warnings: ruleText.length < 20 ? ['la regla es muy corta, revisa que sea explicita'] : [] });
+
+    if (oldN) {
+      const fmOld = { ...oldN.fm, status: 'superseded', superseded_by: `[[${data.title}]]`, updated: today() };
+      const histOld = `${oldN.historial}\n- ${today()} reemplazada por [[${data.title}]]`.trim();
+      fs.writeFileSync(oldN.file, `---\n${toYaml(oldN.entries, fmOld, new Set(['status', 'superseded_by', 'updated']))}\n---\n\n${renderBody({ blocks: oldN.blocks, notas: oldN.notas, historial: histOld })}`, 'utf8');
+    }
+
+    out({ ok: true, created: file, title: data.title, type, superseded: oldN ? oldN.title : null, warnings: ruleText.length < 20 ? ['la regla es muy corta, revisa que sea explicita'] : [] });
     break;
   }
 
@@ -445,6 +494,13 @@ switch (cmd) {
       fm.tags = Array.isArray(data.tags) ? data.tags : String(data.tags).split(',').map((s) => s.trim());
       touched.add('tags');
     }
+    // Claves libres del frontmatter (description, aliases, ...).
+    if (data.frontmatter && typeof data.frontmatter === 'object') {
+      for (const [k, v] of Object.entries(data.frontmatter)) {
+        fm[k] = v;
+        touched.add(k);
+      }
+    }
     if (!Array.isArray(fm.tags)) {
       fm.tags = fm.tags ? [fm.tags] : ['claude-memory'];
       touched.add('tags');
@@ -460,6 +516,11 @@ switch (cmd) {
       if (data[k] !== undefined) setBlock(blocks, label, data[k]);
     }
     let historial = n.historial;
+    // Si se reescribe la regla, el texto anterior queda en el historial: update
+    // nunca debe borrar lo que decia antes sin dejar rastro.
+    if (data.rule !== undefined && n.sections.Regla && data.rule.trim() !== n.sections.Regla.trim()) {
+      historial += `\n- ${today()} regla anterior: "${n.sections.Regla.replace(/"/g, "'")}"`;
+    }
     if (data.history) historial += `\n- ${today()} ${data.history}`;
     else historial += `\n- ${today()} actualizado`;
 
@@ -544,5 +605,5 @@ switch (cmd) {
   }
 
   default:
-    die('Comandos: config | vault | doctor | find | read | add | update | supersede | review | promote | index');
+    die('Comandos: config | vault | doctor | find | read | add [--supersedes "<nota>"] | update | supersede | review | promote | index');
 }
