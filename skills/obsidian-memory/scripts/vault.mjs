@@ -12,7 +12,8 @@ function flag(name, def) {
   const i = argv.indexOf('--' + name);
   if (i === -1) return def;
   const v = argv[i + 1];
-  return v && !v.startsWith('--') ? v : true;
+  if (v === undefined || v.startsWith('--')) return true;
+  return v;
 }
 
 function die(msg) {
@@ -246,6 +247,20 @@ function detectLang(blocks, headings = []) {
 function labelFor(lang, canon) {
   const set = LANG_LABELS[lang] || LANG_LABELS.en;
   return set[canon] || canon;
+}
+
+// History lines follow the note's language, not the machine's.
+const HISTORY_TEXT = {
+  en: { created: (s) => `created (${s})`, supersededBy: (t) => `superseded by [[${t}]]`, supersedes: (t) => `supersedes [[${t}]]`, updated: () => 'updated', prevRule: (r) => `previous rule text: "${r}"` },
+  es: { created: (s) => `creado (${s})`, supersededBy: (t) => `reemplazada por [[${t}]]`, supersedes: (t) => `reemplaza a [[${t}]]`, updated: () => 'actualizada', prevRule: (r) => `regla anterior: "${r}"` },
+  pt: { created: (s) => `criado (${s})`, supersededBy: (t) => `substituído por [[${t}]]`, supersedes: (t) => `substitui [[${t}]]`, updated: () => 'atualizado', prevRule: (r) => `regra anterior: "${r}"` },
+  fr: { created: (s) => `créé (${s})`, supersededBy: (t) => `remplacé par [[${t}]]`, supersedes: (t) => `remplace [[${t}]]`, updated: () => 'mis à jour', prevRule: (r) => `règle précédente : « ${r} »` },
+  de: { created: (s) => `erstellt (${s})`, supersededBy: (t) => `ersetzt durch [[${t}]]`, supersedes: (t) => `ersetzt [[${t}]]`, updated: () => 'aktualisiert', prevRule: (r) => `vorherige Regel: "${r}"` },
+};
+
+function hist(lang, key, arg) {
+  const t = HISTORY_TEXT[lang] || HISTORY_TEXT.en;
+  return t[key](arg);
 }
 
 const H2_ALIASES = {
@@ -521,7 +536,9 @@ switch (cmd) {
       source: data.source || 'session',
     };
     const blocks = [];
-    const lang = memoryLabelsLang();
+    // `data.labels` lets the conversation pick the note language per note;
+    // config `--labels` is only the machine-wide default.
+    const lang = data.labels && LANG_LABELS[data.labels] ? data.labels : memoryLabelsLang();
     setBlock(blocks, labelFor(lang, 'Rule'), ruleText);
     for (const [k, label] of [['why', 'Why'], ['applies', 'When it applies'], ['not_applies', 'When it does NOT apply'], ['verify', 'How to verify']]) {
       if (data[k]) setBlock(blocks, labelFor(lang, label), data[k]);
@@ -530,7 +547,7 @@ switch (cmd) {
       blocks,
       notas: data.notes || '',
       notasHeading: lang === 'en' ? null : labelFor(lang, 'notes'),
-      historial: `- ${today()} created (${data.source || 'session'})`,
+      historial: `- ${today()} ${hist(lang, 'created', data.source || 'session')}` + (oldN ? `\n- ${today()} ${hist(lang, 'supersedes', oldN.title)}` : ''),
       historialHeading: lang === 'en' ? null : labelFor(lang, 'history'),
     };
     const fname = safeName(data.title) + '.md';
@@ -541,8 +558,9 @@ switch (cmd) {
 
     if (oldN) {
       const fmOld = { ...oldN.fm, status: 'superseded', superseded_by: `[[${data.title}]]`, updated: today() };
-      const histOld = `${oldN.historial}\n- ${today()} superseded by [[${data.title}]]`.trim();
-      fs.writeFileSync(oldN.file, `---\n${toYaml(oldN.entries, fmOld, new Set(['status', 'superseded_by', 'updated']))}\n---\n\n${renderBody({ blocks: oldN.blocks, notas: oldN.notas, notasHeading: oldN.notasHeading, historial: histOld, historialHeading: oldN.historialHeading })}`, 'utf8');
+      const oldLang = detectLang(oldN.blocks, [oldN.notasHeading, oldN.historialHeading]);
+      const histOld = `${oldN.historial}\n- ${today()} ${hist(oldLang, 'supersededBy', data.title)}`.trim();
+      fs.writeFileSync(oldN.file, `---\n${toYaml(oldN.entries, fmOld, new Set(['status', 'superseded_by', 'updated']))}\n---\n\n${renderBody({ blocks: oldN.blocks, notas: oldN.notas, notasHeading: oldN.notasHeading || labelFor(oldLang, 'notes'), historial: histOld, historialHeading: oldN.historialHeading || labelFor(oldLang, 'history') })}`, 'utf8');
     }
 
     out({ ok: true, created: file, title: data.title, type, superseded: oldN ? oldN.title : null, warnings: ruleText.length < 20 ? ['rule text is very short, make it explicit'] : [] });
@@ -594,12 +612,12 @@ switch (cmd) {
     // If the rule text is rewritten, the previous text goes to History:
     // update must never erase what it said before without a trace.
     if (data.rule !== undefined && n.sections.Rule && data.rule.trim() !== n.sections.Rule.trim()) {
-      historial += `\n- ${today()} previous rule text: "${n.sections.Rule.replace(/"/g, "'")}"`;
+      historial += `\n- ${today()} ${hist(lang, 'prevRule', n.sections.Rule.replace(/"/g, "'"))}`;
     }
     if (data.history) historial += `\n- ${today()} ${data.history}`;
-    else historial += `\n- ${today()} updated`;
+    else historial += `\n- ${today()} ${hist(lang, 'updated')}`;
 
-    fs.writeFileSync(n.file, `---\n${toYaml(n.entries, fm, touched)}\n---\n\n${renderBody({ blocks, notas: data.notes !== undefined ? data.notes : n.notas, notasHeading: n.notasHeading, historial, historialHeading: n.historialHeading })}`, 'utf8');
+    fs.writeFileSync(n.file, `---\n${toYaml(n.entries, fm, touched)}\n---\n\n${renderBody({ blocks, notas: data.notes !== undefined ? data.notes : n.notas, notasHeading: n.notasHeading || labelFor(lang, 'notes'), historial, historialHeading: n.historialHeading || labelFor(lang, 'history') })}`, 'utf8');
     out({ ok: true, updated: n.file, title: n.title, status: fm.status });
     break;
   }
@@ -612,11 +630,13 @@ switch (cmd) {
     if (!newN) die(`New note not found: "${flag('new')}".`);
     if (oldN.file === newN.file) die('old and new are the same note.');
     const fmOld = { ...oldN.fm, status: 'superseded', superseded_by: `[[${newN.title}]]`, updated: today() };
-    const histOld = `${oldN.historial}\n- ${today()} superseded by [[${newN.title}]]`.trim();
-    fs.writeFileSync(oldN.file, `---\n${toYaml(oldN.entries, fmOld, new Set(['status', 'superseded_by', 'updated']))}\n---\n\n${renderBody({ blocks: oldN.blocks, notas: oldN.notas, notasHeading: oldN.notasHeading, historial: histOld, historialHeading: oldN.historialHeading })}`, 'utf8');
+    const langOld = detectLang(oldN.blocks, [oldN.notasHeading, oldN.historialHeading]);
+    const histOld = `${oldN.historial}\n- ${today()} ${hist(langOld, 'supersededBy', newN.title)}`.trim();
+    fs.writeFileSync(oldN.file, `---\n${toYaml(oldN.entries, fmOld, new Set(['status', 'superseded_by', 'updated']))}\n---\n\n${renderBody({ blocks: oldN.blocks, notas: oldN.notas, notasHeading: oldN.notasHeading || labelFor(langOld, 'notes'), historial: histOld, historialHeading: oldN.historialHeading || labelFor(langOld, 'history') })}`, 'utf8');
     const fmNew = { ...newN.fm, supersedes: `[[${oldN.title}]]`, updated: today() };
-    const histNew = `${newN.historial}\n- ${today()} supersedes [[${oldN.title}]]`.trim();
-    fs.writeFileSync(newN.file, `---\n${toYaml(newN.entries, fmNew, new Set(['supersedes', 'updated']))}\n---\n\n${renderBody({ blocks: newN.blocks, notas: newN.notas, notasHeading: newN.notasHeading, historial: histNew, historialHeading: newN.historialHeading })}`, 'utf8');
+    const langNew = detectLang(newN.blocks, [newN.notasHeading, newN.historialHeading]);
+    const histNew = `${newN.historial}\n- ${today()} ${hist(langNew, 'supersedes', oldN.title)}`.trim();
+    fs.writeFileSync(newN.file, `---\n${toYaml(newN.entries, fmNew, new Set(['supersedes', 'updated']))}\n---\n\n${renderBody({ blocks: newN.blocks, notas: newN.notas, notasHeading: newN.notasHeading || labelFor(langNew, 'notes'), historial: histNew, historialHeading: newN.historialHeading || labelFor(langNew, 'history') })}`, 'utf8');
     out({ ok: true, superseded: oldN.title, by: newN.title });
     break;
   }

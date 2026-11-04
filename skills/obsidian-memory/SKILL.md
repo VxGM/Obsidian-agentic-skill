@@ -33,10 +33,17 @@ The script prints JSON. Check `ok` before assuming anything worked.
 
 ## Language
 
-Answer the user in **their** language, always. Memory notes may be written in the
-user's language too: the script reads block labels in English, Spanish,
-Portuguese, French and German, and keeps whatever language each note already
-uses. New notes follow `config --labels <en|es|pt|fr|de>` (English by default).
+Answer the user in **their** language, always.
+
+Memory notes are written in the user's language too, labels included. Pass the
+language code in the `add` payload (`"labels": "es"`) so a Spanish conversation
+produces a Spanish note. Supported: `en`, `es`, `pt`, `fr`, `de`. If you omit it,
+new notes fall back to `config --labels` — which is machine-wide and English by
+default, so a Spanish conversation would produce a half-English note.
+
+Existing notes are never rewritten into another language: the script reads labels
+in all five languages and updates each note in the language it already uses,
+including its history lines and headings.
 
 This file is in English so any agent can follow it; that does not mean you reply
 in English.
@@ -86,7 +93,8 @@ What I do NOT have stored: stack, sections or copy. Shall we capture it?
 ```
 
 If there is nothing, say so in one line and offer to store it. Never fill the
-gap with a guess.
+gap with a guess. If the user declines or answers "I don't know, whatever you
+stored", stop there: leave the vault untouched and say why.
 
 ## 2. CAPTURE — what deserves memory
 
@@ -111,7 +119,13 @@ Duplicating the same topic guarantees the two copies drift apart.
 ## 3. INTERVIEW — how to ask
 
 One batch. **At most 3 questions**, short, concrete, and only the missing ones.
-If the user already said it in the conversation, do not ask again: use it.
+If the user already said it in the conversation, do not ask again: use it. If the
+user already gave a partial reason, confirm it in one line ("so the reason is X,
+right?") instead of asking the open question again.
+
+If you have to drop one, drop "does it replace something" when recall already
+returned nothing, and spend that slot on scope — a wrong `scope` poisons every
+future recall.
 
 Mandatory questions for a new rule:
 1. **Why?** (without this the note is useless — never make it up)
@@ -169,7 +183,12 @@ node $VM add --json note.json --supersedes "Old note"   # rule that replaces ano
 - `title` human and in the user's language, not a slug. It becomes the file name,
   so two notes cannot share a title (a note replacing another gets a different
   title and they link through `supersedes`/`superseded_by`).
-- `scope`: `global`, or the project/stack name.
+- `labels`: language of this note (`en|es|pt|fr|de`). Pass the user's language;
+  without it the machine default applies and a Spanish conversation produces a
+  note with English labels.
+- `scope`: `global`, the project name, or the stack. If the user says "this
+  project" and you do not know its name, use the repo or folder name you are
+  working in and say which one you used. Never invent a product or company name.
 - `confidence`: 0.9 if the user said it clearly; 0.6 if you inferred it or it is doubtful.
 - `type`: `rule`, `preference`, `decision`, `lesson`, `project`, `feedback`, `reference`.
 - If the script answers `reason: "possible duplicate..."`: **do not use `--force`**.
@@ -188,6 +207,7 @@ node $VM add --json note.json --supersedes "Old note"   # rule that replaces ano
   "note": "Tests before saying done",
   "rule": "new rule text (optional)",
   "why": "...", "applies": "...", "not_applies": "...", "verify": "...",
+  "notes": "free text for the Notes section (optional)",
   "tags": ["agent-memory", "rule"],
   "type": "rule", "status": "active", "scope": "global", "confidence": 0.9,
   "promoted_to": "<path>/AGENTS.md#section",
@@ -204,7 +224,8 @@ node $VM add --json note.json --supersedes "Old note"   # rule that replaces ano
   text in `## History`. You do not need to copy it by hand.
 - `history` is the readable reason for this edit. Use it every time you update.
 - The script only rewrites the keys you touch and keeps block order: inherited
-  notes are not "normalised".
+  notes are not "normalised". New headings follow the note's own language, and
+  history lines are written in that language too.
 
 ## 5. EVOLVE — when the rule changes
 
@@ -284,7 +305,9 @@ After adding or changing notes:
 node $VM index
 ```
 
-Regenerates `_Index.md` with links and the Base embed. Do not edit it by hand.
+Regenerates `_Index.md` with links and, when the memory folder contains a
+`.base` file, embeds it. The index text itself is always English. Do not edit it
+by hand.
 
 ## Hard limits
 
