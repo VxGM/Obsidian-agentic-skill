@@ -1,52 +1,72 @@
 # obsidian-memory
 
-Skill agentica que convierte tu vault de Obsidian en memoria persistente para
-cualquier agente de IA (Command Code, Claude Code, Codex, opencode, ...).
+Skill para agentes de IA que convierte tu vault de Obsidian en **memoria
+persistente y agentica**: el agente busca reglas antes de trabajar, te
+entrevista para guardar las nuevas, y actualiza la memoria cuando cambias de
+criterio.
 
-El agente **pregunta antes de guardar**, **actualiza** cuando cambias de criterio y
-**revisa** la memoria para que no envejezca. Sin plugins, sin Obsidian abierto:
-lee y escribe los `.md` del vault directamente.
+Funciona con cualquier agente compatible con el formato [Agent Skills](https://agentskills.io)
+(Claude Code, Codex, Cursor, opencode, Command Code y ~75 mas), porque se instala
+con `npx skills`.
+
+## Instalacion
+
+```bash
+npx skills add VxGM/Obisidian-skill -g
+```
+
+`-g` instala a nivel usuario (todos tus proyectos). Sin `-g` se instala en el
+proyecto actual.
+
+Elegir agente o nombre explicito:
+
+```bash
+npx skills add VxGM/Obisidian-skill --skill obsidian-memory -a claude-code -a codex -g
+```
+
+Sin prompts (CI o instalacion rapida):
+
+```bash
+npx skills add VxGM/Obisidian-skill --skill obsidian-memory --all -y
+```
+
+Actualizar despues:
+
+```bash
+npx skills update obsidian-memory
+```
+
+### Elegir el vault
+
+La primera vez, apunta la skill a tu vault:
+
+```bash
+node ~/.agents/skills/obsidian-memory/scripts/vault.mjs config --vault "C:\Users\tu-usuario\Obsidian\MiVault"
+```
+
+Si no lo configuras, la skill lo deduce: `OBSIDIAN_VAULT` → vault que ya tiene
+carpeta de memoria (`Claude Memory` / `Agent Memory`) → vault abierto en Obsidian.
 
 ## Que resuelve
 
 - Tu contexto se borra al cerrar la sesion; el vault no.
 - Un agente nuevo no repite errores ni vuelve a preguntar lo mismo.
 - Cuando una regla cambia, la vieja no se borra: queda `superseded` con el
-  historial de por que, y la nueva la enlaza.
-
-## Instalacion
-
-```bat
-xcopy /E /I /Y ".commandcode\skills\obsidian-memory" "%USERPROFILE%\.agents\skills\obsidian-memory"
-node "%USERPROFILE%\.agents\skills\obsidian-memory\scripts\vault.mjs" config --vault "C:\Users\ASUS\Obsidian\PP"
-```
-
-`.agents\skills` lo leen varias herramientas. Si solo usas Command Code:
-`%USERPROFILE%\.commandcode\skills\`.
-
-El vault se resuelve en este orden: `OBSIDIAN_VAULT` → `~/.obsidian-memory.json`
-→ vault que ya tiene carpeta de memoria → vault abierto.
-
-## Uso
-
-Pidele al agente en lenguaje normal:
-
-- "recuerda que los commits van sin emoji"
-- "guarda que en este proyecto usamos Drizzle, no Prisma"
-- "revisemos mi memoria"
-
-O invoca la skill: `/obsidian-memory recall testing`, `/obsidian-memory review`.
+  historial del por que, y la nueva la enlaza.
 
 ## Flujo
 
 ```
-RECALL  -> busca reglas activas antes de trabajar
-CAPTURE -> filtra que merece guardarse (una regla = una nota)
+RECALL    -> busca reglas activas antes de trabajar
+CAPTURE   -> filtra que merece guardarse (una regla = una nota)
 INTERVIEW -> max 3 preguntas: por que, cuando NO aplica, reemplaza algo?
-EVOLVE  -> update (matiz) o supersede (regla reemplazada)
-REVIEW  -> notas viejas o sin criterio de verificacion
-PROMOTE -> bloque listo para AGENTS.md
+EVOLVE    -> update (matiz) o supersede (regla reemplazada)
+REVIEW    -> notas viejas, de baja confianza o sin criterio de verificacion
+PROMOTE   -> bloque listo para pegar en AGENTS.md
 ```
+
+Pidele al agente en lenguaje normal ("recuerda que los commits van sin emoji",
+"revisemos mi memoria") o invoca `/obsidian-memory`.
 
 ## Comandos
 
@@ -64,10 +84,15 @@ PROMOTE -> bloque listo para AGENTS.md
 | `promote` | bloque para AGENTS.md |
 | `index` | regenerar `_Index.md` |
 
-Todo devuelve JSON. `add` y `update` reciben un archivo JSON (evita infierno de
-comillas en cmd).
+Todo devuelve JSON. `add` y `update` reciben un archivo JSON: evita el infierno
+de comillas de `cmd` y de los mensajes multilinea.
 
-## Esquema
+```bash
+node scripts/vault.mjs find --query "testing" --limit 5
+node scripts/vault.mjs add --json nota.json
+```
+
+## Esquema de nota
 
 ```yaml
 tags: [claude-memory, rule]
@@ -80,16 +105,30 @@ supersedes / superseded_by: "[[Otra nota]]"
 promoted_to: "C:\Users\ASUS\AGENTS.md#seccion"
 ```
 
-Cuerpo: `**Regla:**`, `**Por qué:**`, `**Cuándo aplica:**`, `**Cuándo NO aplica:**`,
-`**Cómo verificar:**`, `## Historial`.
+Cuerpo: `**Regla:**`, `**Por qué:**`, `**Cuándo aplica:**`,
+`**Cuándo NO aplica:**`, `**Cómo verificar:**` y `## Historial`.
 
-Convive con el esquema viejo (`**Why:**`, `type: feedback`): las etiquetas y
-secciones desconocidas se preservan tal cual, nunca se reescriben.
+**Convive con vaults existentes:** las etiquetas y secciones que no conoce
+(`**Why:**`, `**Operative rule now lives in:**`, frontmatter extra) se preservan
+tal cual. Nunca reescribe prosa que no genero.
 
 ## Por que un script y no solo instrucciones
 
 Buscar, deduplicar, enlazar y versionar reglas a mano produce notas duplicadas,
 reglas contradictorias y perdida de historial. El script es determinista:
-`add` rechaza duplicados con similitud >= 0.6, `supersede` siempre deja rastro.
+`add` rechaza duplicados (similitud >= 0.6) mostrando el candidato, `supersede`
+siempre deja rastro enlazado.
 
-Sin dependencias: Node 18+.
+Sin dependencias, sin MCP, sin Obsidian abierto: Node 18+ y acceso al `.md`.
+
+## Estructura
+
+```
+skills/obsidian-memory/
+├── SKILL.md          # el playbook que lee el agente
+└── scripts/vault.mjs # CLI determinista
+```
+
+## Licencia
+
+MIT
